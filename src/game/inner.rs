@@ -12,12 +12,15 @@ const MAX_KEY_BUFF_LEN: usize = 3; // how many keys we'll keep track of before i
 const FRAMES_BEFORE_WE_SEAL_MOVE: u32 = 8;
 const FRAMES_TO_SHOW_PURGATORY: u32 = 2;
 
-const COLOR_LINE: &str = "blue"; // how many keys we'll keep track of before ignoring inputs
-const COLOR_PYRAMID: &str = "white"; // how many keys we'll keep track of before ignoring inputs
-const COLOR_SQUIGGLE: &str = "green"; // how many keys we'll keep track of before ignoring inputs
-const COLOR_REVERSE_SQUIGGLE: &str = "red"; // how many keys we'll keep track of before ignoring inputs
-const COLOR_SQUARE: &str = "orange"; // how many keys we'll keep track of before ignoring inputs
-const COLOR_PURGATORY: &str = "#242424";
+const COLOR_LINE: &str = "#46b5d1"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_PYRAMID: &str = "#e43f5a"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_SQUIGGLE: &str = "#b030b0"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_REVERSE_SQUIGGLE: &str = "#f638dc"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_SQUARE: &str = "#c02739"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_PURGATORY: &str = "#ffd700";
+const COLOR_BACKGROUND: &str = "#443737";
+const COLOR_BANNER: &str = "black";
+const COLOR_STROKE: &str = "black";
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Vector2D {
@@ -547,7 +550,7 @@ impl Inner {
 		context.clear_rect(0., 0., self.width, self.height);
 
 		// draw background
-		self.start_context("white", "black", 0.6, 3.);
+		self.start_context(COLOR_BACKGROUND, COLOR_STROKE, 1.0, 3.);
 		for x in 0..NUM_COLS {
 			for y in 0..NUM_ROWS {
 				self.draw_rect(&Vector2D { x: x, y: y });
@@ -563,7 +566,7 @@ impl Inner {
 					&piece.color
 				};
 
-				self.start_context(color, "black", 1.0, 3.);
+				self.start_context(color, COLOR_STROKE, 1.0, 3.);
 				self.draw_rect(&piece.position);
 				self.end_context();
 			}
@@ -573,7 +576,7 @@ impl Inner {
 			// draw ghost first in case real piece steps in
 			let extra_y = Inner::get_interception_point(&current_piece, &self.board_pieces);
 
-			self.start_context(&current_piece.color, "black", 0.2, 3.);
+			self.start_context(&current_piece.color, COLOR_STROKE, 0.2, 3.);
 			for piece in current_piece.squares.iter() {
 				let x = current_piece.top_left.x + piece.x;
 				let y = current_piece.top_left.y + piece.y + extra_y;
@@ -581,7 +584,7 @@ impl Inner {
 			}
 			self.end_context();
 
-			self.start_context(&current_piece.color, "black", 1.0, 3.);
+			self.start_context(&current_piece.color, COLOR_STROKE, 1.0, 3.);
 			for piece in current_piece.squares.iter() {
 				let x = current_piece.top_left.x + piece.x;
 				let y = current_piece.top_left.y + piece.y;
@@ -633,8 +636,8 @@ impl Inner {
 	fn draw_banner(&self, text: &str) {
 		let context = &self.context;
 		context.save();
-		context.set_fill_style(&JsValue::from("white"));
-		context.set_global_alpha(0.5);
+		context.set_fill_style(&JsValue::from(COLOR_BANNER));
+		context.set_global_alpha(0.8);
 		let quarter_height = self.height / 4.;
 		context.fill_rect(
 			0.,
