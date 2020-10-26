@@ -1,7 +1,6 @@
 use crate::game::game::NUM_COLS;
 use crate::game::game::NUM_ROWS;
 use rand::rngs::ThreadRng;
-use rand::seq::SliceRandom;
 use rand::Rng;
 use std::{
 	cmp::{max, min},
@@ -9,13 +8,13 @@ use std::{
 	f64,
 	rc::Rc,
 };
-use tau::TAU;
 use wasm_bindgen::JsValue;
 use web_sys::CanvasRenderingContext2d;
 
 pub const FPS: i32 = (0.025 * 1000.0) as i32; // 0.025 sec -> 40 fps
 const MIN_SPEED: u32 = 3; // number of frames between updates
 const MAX_SPEED: u32 = 1; // number of frames between updates
+const MOVE_BUFFER_FRAMES: u32 = 10;
 
 const MAX_KEY_BUFF_LEN: usize = 3; // how many keys we'll keep track of before ignoring inputs
 const COLOR_LINE: &str = "blue"; // how many keys we'll keep track of before ignoring inputs
@@ -71,6 +70,8 @@ pub struct Inner {
 	frames_between_updates: u32,
 	frames_until_update: u32,
 
+	frames_since_last_successful_move: u32,
+
 	should_send_to_bottom: bool,
 	should_swap_piece: bool,
 
@@ -111,6 +112,8 @@ impl Inner {
 			frames_between_updates: MIN_SPEED,
 			frames_until_update: 0,
 
+			frames_since_last_successful_move: 0,
+
 			should_send_to_bottom: false,
 			should_swap_piece: false,
 
@@ -130,6 +133,8 @@ impl Inner {
 		self.score = 0;
 		self.frames_between_updates = MIN_SPEED;
 		self.frames_until_update = MIN_SPEED;
+		self.current_piece = None;
+		self.board_pieces.clear();
 	}
 
 	pub fn focus(&self) -> Result<(), JsValue> {
@@ -235,46 +240,95 @@ impl Inner {
 	fn update(&mut self) -> Result<(), JsValue> {
 		if let None = self.current_piece {
 			self.current_piece = Some(self.get_random_piece());
+			self.frames_since_last_successful_move = 0;
+		} else {
+			if self.frames_since_last_successful_move > MOVE_BUFFER_FRAMES {
+				self.current_piece = None;
+			}
 		}
 
 		if let Some(current_piece) = &mut self.current_piece {
-			let mut y_to_move = 1 + self.move_y_delta;
-			self.move_y_delta = 0;
+			let mut did_move = false;
+			// move down
+			{
+				// let mut y_to_move = 1 + self.move_y_delta;
+				let mut y_to_move = self.move_y_delta;
 
-			if self.should_send_to_bottom {
-				y_to_move = NUM_ROWS;
-				self.should_send_to_bottom = false;
-			}
+				did_move = true;
 
-			while y_to_move > 0 {
-				y_to_move -= 1;
-				current_piece.top_left.y += 1;
-				if Inner::does_collide(&current_piece, &self.board_pieces) {
-					// undo last move
-					current_piece.top_left.y -= 1;
-					break;
+				self.move_y_delta = 0;
+
+				if self.should_send_to_bottom {
+					y_to_move = NUM_ROWS;
+					self.should_send_to_bottom = false;
+				}
+
+				while y_to_move > 0 {
+					y_to_move -= 1;
+					current_piece.top_left.y += 1;
+					if Inner::does_collide(&current_piece, &self.board_pieces) {
+						// undo last move
+						current_piece.top_left.y -= 1;
+						break;
+					} else {
+						did_move = true;
+					}
 				}
 			}
 
-			let mut x_to_move = self.move_x_delta;
-			let x_delta = if x_to_move > 0 { 1 } else { -1 };
-			self.move_x_delta = 0;
-			while x_to_move != 0 {
-				x_to_move -= x_delta;
-				current_piece.top_left.x += x_delta;
-				log::info!("Moving");
-				if Inner::does_collide(&current_piece, &self.board_pieces) {
-					log::info!("Actually...");
-					current_piece.top_left.x -= x_delta;
-					break;
-				} else {
-					log::info!("Success...");
+			// move left/right
+			{
+				let mut x_to_move = self.move_x_delta;
+				let x_delta = if x_to_move > 0 { 1 } else { -1 };
+				self.move_x_delta = 0;
+				while x_to_move != 0 {
+					x_to_move -= x_delta;
+					current_piece.top_left.x += x_delta;
+					if Inner::does_collide(&current_piece, &self.board_pieces) {
+						current_piece.top_left.x -= x_delta;
+						break;
+					} else {
+						did_move = true;
+					}
 				}
+			}
+
+			// rotate
+			{
+				while self.rotate > 0 {
+					self.rotate -= 1;
+					Inner::rotate_clockwise(current_piece);
+					if Inner::does_collide(&current_piece, &self.board_pieces) {
+						Inner::rotate_counter_clockwise(&current_piece);
+					} else {
+						did_move = true;
+					}
+				}
+			}
+
+			if did_move {
+				self.frames_since_last_successful_move = 0;
+			} else {
+				self.frames_since_last_successful_move += 1;
 			}
 		}
 		// TODO
 		Ok(())
 	}
+
+	fn rotate_clockwise(current_piece: &mut Piece) {
+		for square in current_piece.squares.iter_mut() {
+			// flip about the x-axis
+			square.y = current_piece.size - 1 - square.y;
+
+			// translate about the origin
+			let temp = square.x;
+			square.x = square.y;
+			square.y = temp;
+		}
+	}
+
+	fn rotate_counter_clockwise(current_piece: &Piece) {}
 
 	fn does_collide(current_piece: &Piece, board: &Vec<Vec<Square>>) -> bool {
 		for square in current_piece.squares.iter() {
@@ -308,14 +362,14 @@ impl Inner {
 				color: COLOR_LINE.to_string(),
 				top_left: Vector2D {
 					x: NUM_COLS / 2 - 2,
-					y: 0,
+					y: -1,
 				},
 				size: 4,
 				squares: vec![
-					Vector2D { x: 0, y: 0 },
-					Vector2D { x: 1, y: 0 },
-					Vector2D { x: 2, y: 0 },
-					Vector2D { x: 3, y: 0 },
+					Vector2D { x: 0, y: 1 },
+					Vector2D { x: 1, y: 1 },
+					Vector2D { x: 2, y: 1 },
+					Vector2D { x: 3, y: 1 },
 				],
 			},
 
@@ -338,14 +392,14 @@ impl Inner {
 				color: COLOR_SQUIGGLE.to_string(),
 				top_left: Vector2D {
 					x: NUM_COLS / 2 - 2,
-					y: 0,
+					y: -1,
 				},
 				size: 3,
 				squares: vec![
-					Vector2D { x: 1, y: 0 },
-					Vector2D { x: 2, y: 0 },
-					Vector2D { x: 0, y: 1 },
 					Vector2D { x: 1, y: 1 },
+					Vector2D { x: 2, y: 1 },
+					Vector2D { x: 0, y: 2 },
+					Vector2D { x: 1, y: 2 },
 				],
 			},
 
@@ -353,14 +407,14 @@ impl Inner {
 				color: COLOR_REVERSE_SQUIGGLE.to_string(),
 				top_left: Vector2D {
 					x: NUM_COLS / 2 - 2,
-					y: 0,
+					y: -1,
 				},
 				size: 3,
 				squares: vec![
-					Vector2D { x: 1, y: 0 },
-					Vector2D { x: 0, y: 0 },
-					Vector2D { x: 2, y: 1 },
 					Vector2D { x: 1, y: 1 },
+					Vector2D { x: 0, y: 1 },
+					Vector2D { x: 2, y: 2 },
+					Vector2D { x: 1, y: 2 },
 				],
 			},
 
@@ -386,6 +440,12 @@ impl Inner {
 	pub fn draw(&mut self) -> Result<(), JsValue> {
 		let context = &self.context;
 		context.clear_rect(0., 0., self.width, self.height);
+
+		for x in 0..NUM_COLS {
+			for y in 0..NUM_ROWS {
+				self.draw_bg_rect(&Vector2D { x: x, y: y }, "rgba(255,255,255,0.5)");
+			}
+		}
 
 		if let Some(current_piece) = &self.current_piece {
 			for piece in current_piece.squares.iter() {
@@ -430,6 +490,24 @@ impl Inner {
 		context.set_fill_style(&JsValue::from(color));
 		context.set_stroke_style(&JsValue::from("black"));
 		context.set_line_width(1.);
+		context.begin_path();
+		context.rect(
+			self.rect_size * rect.x as f64,
+			self.rect_size * rect.y as f64,
+			self.rect_size,
+			self.rect_size,
+		);
+		context.fill();
+		context.stroke();
+		context.restore();
+	}
+
+	fn draw_bg_rect(&self, rect: &Vector2D, color: &str) {
+		let context = &self.context;
+		context.save();
+		context.set_fill_style(&JsValue::from(color));
+		context.set_stroke_style(&JsValue::from("black"));
+		context.set_line_width(3.);
 		context.begin_path();
 		context.rect(
 			self.rect_size * rect.x as f64,
