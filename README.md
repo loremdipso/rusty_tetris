@@ -1,2 +1,3 @@
 # rusty_tetris
-Let's make tetris in rust, shall we?
+Let's explore Rust's WASM bindings with a simple tetris clone
+
