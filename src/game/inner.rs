@@ -1,30 +1,23 @@
-use crate::game::game::NUM_COLS;
-use crate::game::game::NUM_ROWS;
-use rand::rngs::ThreadRng;
-use rand::Rng;
+use crate::game::game::{NUM_COLS, NUM_ROWS};
+use rand::{rngs::ThreadRng, Rng};
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::convert::TryInto;
-use std::{
-	cmp::{max, min},
-	collections::VecDeque,
-	f64,
-	rc::Rc,
-};
+use std::{collections::VecDeque, f64, rc::Rc};
 use wasm_bindgen::JsValue;
 use web_sys::CanvasRenderingContext2d;
 
 pub const FPS: i32 = (0.025 * 1000.0) as i32; // 0.025 sec -> 40 fps
-const MIN_SPEED: u32 = 3; // number of frames between updates
-const MAX_SPEED: u32 = 1; // number of frames between updates
-const MOVE_BUFFER_FRAMES: u32 = 10;
-
+const MIN_SPEED: u32 = 5; // number of frames between updates
 const MAX_KEY_BUFF_LEN: usize = 3; // how many keys we'll keep track of before ignoring inputs
+const FRAMES_BEFORE_WE_SEAL_MOVE: u32 = 8;
+const FRAMES_TO_SHOW_PURGATORY: u32 = 2;
+
 const COLOR_LINE: &str = "blue"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_PYRAMID: &str = "white"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_SQUIGGLE: &str = "green"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_REVERSE_SQUIGGLE: &str = "red"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_SQUARE: &str = "orange"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_PURGATORY: &str = "#242424";
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Vector2D {
@@ -76,6 +69,7 @@ pub struct Inner {
 	frames_until_update: u32,
 
 	frames_since_last_successful_move: u32,
+	frames_to_wait: u32,
 
 	should_send_to_bottom: bool,
 	should_swap_piece: bool,
@@ -117,6 +111,7 @@ impl Inner {
 			frames_until_update: 0,
 
 			frames_since_last_successful_move: 0,
+			frames_to_wait: 0,
 
 			should_send_to_bottom: false,
 			should_swap_piece: false,
@@ -138,6 +133,7 @@ impl Inner {
 		self.frames_until_update = MIN_SPEED;
 		self.current_piece = None;
 		self.board_pieces.clear();
+		self.frames_to_wait = 0;
 	}
 
 	pub fn focus(&self) -> Result<(), JsValue> {
@@ -241,6 +237,11 @@ impl Inner {
 	}
 
 	fn update(&mut self) -> Result<(), JsValue> {
+		if self.frames_to_wait > 0 {
+			self.frames_to_wait -= 1;
+			return Ok(());
+		}
+
 		if self.should_swap_piece {
 			self.should_swap_piece = false;
 			let previously_swapped_piece = self.swapped_piece.take();
@@ -275,18 +276,12 @@ impl Inner {
 								}
 							}
 						}
-					} else {
-						log::info!(
-							"Why didn't this work? index: {}, size: {}",
-							row_index,
-							self.board_pieces.len(),
-						);
 					}
 				}
 			}
 
 			Some(current_piece) => {
-				if self.frames_since_last_successful_move > MOVE_BUFFER_FRAMES {
+				if self.frames_since_last_successful_move > FRAMES_BEFORE_WE_SEAL_MOVE {
 					let mut rows_to_check: BTreeSet<usize> = BTreeSet::new();
 
 					// add to board
@@ -310,16 +305,22 @@ impl Inner {
 					}
 
 					// let's loop through the relevant rows, backwards, removing any that are full up
+					let mut should_redraw = false;
 					for row_index in rows_to_check.iter().rev() {
-						let mut row = self.board_pieces.get_mut(*row_index).unwrap();
+						let row = self.board_pieces.get_mut(*row_index).unwrap();
 						if row.len() == NUM_COLS.try_into().unwrap() {
 							for cell in row.iter_mut() {
 								cell.purgatory = true;
+								should_redraw = true;
 							}
 						}
 					}
 
 					self.current_piece = None;
+
+					if should_redraw {
+						self.frames_to_wait = FRAMES_TO_SHOW_PURGATORY;
+					}
 					return Ok(());
 				}
 			}
@@ -336,7 +337,7 @@ impl Inner {
 					y_to_move = NUM_ROWS;
 					self.should_send_to_bottom = false;
 					did_send_to_bottom = true;
-					self.frames_since_last_successful_move = MOVE_BUFFER_FRAMES;
+					self.frames_since_last_successful_move = FRAMES_BEFORE_WE_SEAL_MOVE;
 				}
 
 				while y_to_move > 0 {
@@ -545,21 +546,26 @@ impl Inner {
 		let context = &self.context;
 		context.clear_rect(0., 0., self.width, self.height);
 
+		// draw background
+		self.start_context("white", "black", 0.6, 3.);
 		for x in 0..NUM_COLS {
 			for y in 0..NUM_ROWS {
-				self.draw_bg_rect(&Vector2D { x: x, y: y }, "rgba(255,255,255,0.5)");
+				self.draw_rect(&Vector2D { x: x, y: y });
 			}
 		}
+		self.end_context();
 
 		for row in self.board_pieces.iter() {
 			for piece in row.iter() {
 				let color = if piece.purgatory {
-					"brown"
+					COLOR_PURGATORY
 				} else {
 					&piece.color
 				};
 
-				self.draw_rect(&piece.position, color);
+				self.start_context(color, "black", 1.0, 3.);
+				self.draw_rect(&piece.position);
+				self.end_context();
 			}
 		}
 
@@ -567,17 +573,21 @@ impl Inner {
 			// draw ghost first in case real piece steps in
 			let extra_y = Inner::get_interception_point(&current_piece, &self.board_pieces);
 
+			self.start_context(&current_piece.color, "black", 0.2, 3.);
 			for piece in current_piece.squares.iter() {
 				let x = current_piece.top_left.x + piece.x;
 				let y = current_piece.top_left.y + piece.y + extra_y;
-				self.draw_ghost_rect(&Vector2D { x: x, y: y }, &current_piece.color);
+				self.draw_rect(&Vector2D { x: x, y: y });
 			}
+			self.end_context();
 
+			self.start_context(&current_piece.color, "black", 1.0, 3.);
 			for piece in current_piece.squares.iter() {
 				let x = current_piece.top_left.x + piece.x;
 				let y = current_piece.top_left.y + piece.y;
-				self.draw_rect(&Vector2D { x: x, y: y }, &current_piece.color);
+				self.draw_rect(&Vector2D { x: x, y: y });
 			}
+			self.end_context();
 		}
 
 		if self.is_paused {
@@ -595,66 +605,29 @@ impl Inner {
 		Ok(())
 	}
 
-	fn draw_line(context: &Rc<CanvasRenderingContext2d>, p1: &FVector2D, p2: &FVector2D) {
-		context.begin_path();
-		context.move_to(p1.x, p1.y);
-		context.line_to(p2.x, p2.y);
-		context.stroke();
-	}
-
-	fn draw_rect(&self, rect: &Vector2D, color: &str) {
+	fn start_context(&self, fill_color: &str, stroke_color: &str, opacity: f64, line_width: f64) {
 		let context = &self.context;
 		context.save();
-		context.set_fill_style(&JsValue::from(color));
-		context.set_stroke_style(&JsValue::from("black"));
-		context.set_line_width(1.);
-		context.begin_path();
-		context.rect(
+		context.set_fill_style(&JsValue::from(fill_color));
+		context.set_stroke_style(&JsValue::from(stroke_color));
+		context.set_global_alpha(opacity);
+		context.set_line_width(line_width);
+	}
+
+	fn draw_rect(&self, rect: &Vector2D) {
+		&self.context.begin_path();
+		&self.context.rect(
 			self.rect_size * rect.x as f64,
 			self.rect_size * rect.y as f64,
 			self.rect_size,
 			self.rect_size,
 		);
-		context.fill();
-		context.stroke();
-		context.restore();
+		&self.context.fill();
+		&self.context.stroke();
 	}
 
-	fn draw_bg_rect(&self, rect: &Vector2D, color: &str) {
-		let context = &self.context;
-		context.save();
-		context.set_fill_style(&JsValue::from(color));
-		context.set_stroke_style(&JsValue::from("black"));
-		context.set_line_width(3.);
-		context.begin_path();
-		context.rect(
-			self.rect_size * rect.x as f64,
-			self.rect_size * rect.y as f64,
-			self.rect_size,
-			self.rect_size,
-		);
-		context.fill();
-		context.stroke();
-		context.restore();
-	}
-
-	fn draw_ghost_rect(&self, rect: &Vector2D, color: &str) {
-		let context = &self.context;
-		context.save();
-		context.set_global_alpha(0.2);
-		context.set_fill_style(&JsValue::from(color));
-		context.set_stroke_style(&JsValue::from("black"));
-		context.set_line_width(1.);
-		context.begin_path();
-		context.rect(
-			self.rect_size * rect.x as f64,
-			self.rect_size * rect.y as f64,
-			self.rect_size,
-			self.rect_size,
-		);
-		context.fill();
-		context.stroke();
-		context.restore();
+	fn end_context(&self) {
+		&self.context.restore();
 	}
 
 	fn draw_banner(&self, text: &str) {

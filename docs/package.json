@@ -1,0 +1,15 @@
+{
+  "name": "rusty_tetris",
+  "collaborators": [
+    "Michael Adams <madams@gmail.com>"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "rusty_tetris_bg.wasm",
+    "rusty_tetris.js",
+    "rusty_tetris.d.ts"
+  ],
+  "module": "rusty_tetris.js",
+  "types": "rusty_tetris.d.ts",
+  "sideEffects": false
+}
