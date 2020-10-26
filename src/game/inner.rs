@@ -65,7 +65,7 @@ pub struct Inner {
 
 	current_piece: Option<Piece>,
 	swapped_piece: Option<Piece>,
-	board_pieces: Vec<Vec<Square>>,
+	board_pieces: Vec<Square>, // one-dimensional
 
 	frames_between_updates: u32,
 	frames_until_update: u32,
@@ -75,9 +75,8 @@ pub struct Inner {
 	should_send_to_bottom: bool,
 	should_swap_piece: bool,
 
-	rotate: i32,
-	move_y_delta: i32,
-	move_x_delta: i32,
+	rotations_to_perform: i32,
+	x_to_move: i32,
 
 	rng: ThreadRng,
 }
@@ -117,9 +116,8 @@ impl Inner {
 			should_send_to_bottom: false,
 			should_swap_piece: false,
 
-			rotate: 0,
-			move_y_delta: 0,
-			move_x_delta: 0,
+			rotations_to_perform: 0,
+			x_to_move: 0,
 
 			rng: rand::thread_rng(),
 		};
@@ -222,11 +220,11 @@ impl Inner {
 			match key.as_str() {
 				// NOTE: y is flipped here since that's the default for rendering, and it's easier
 				// to flip it just here than anytime we draw
-				"ArrowUp" => self.rotate += 1,
-				"ArrowDown" => self.move_y_delta = 1,
+				"ArrowUp" => self.rotations_to_perform += 1,
+				"ArrowDown" => self.rotations_to_perform -= 1,
 
-				"ArrowRight" => self.move_x_delta = 1,
-				"ArrowLeft" => self.move_x_delta = -1,
+				"ArrowRight" => self.x_to_move = 1,
+				"ArrowLeft" => self.x_to_move = -1,
 
 				// reverse head
 				" " => self.should_send_to_bottom = true,
@@ -238,29 +236,42 @@ impl Inner {
 	}
 
 	fn update(&mut self) -> Result<(), JsValue> {
-		if let None = self.current_piece {
-			self.current_piece = Some(self.get_random_piece());
-			self.frames_since_last_successful_move = 0;
-		} else {
-			if self.frames_since_last_successful_move > MOVE_BUFFER_FRAMES {
-				self.current_piece = None;
+		match &self.current_piece {
+			None => {
+				self.current_piece = Some(self.get_random_piece());
+				self.frames_since_last_successful_move = 0;
 			}
-		}
+
+			Some(current_piece) => {
+				if self.frames_since_last_successful_move > MOVE_BUFFER_FRAMES {
+					// add to board
+					for square in current_piece.squares.iter() {
+						let x = current_piece.top_left.x + square.x;
+						let y = current_piece.top_left.y + square.y;
+
+						self.board_pieces.push(Square {
+							position: Vector2D { x: x, y: y },
+							color: current_piece.color.clone(),
+						});
+					}
+
+					self.current_piece = None;
+				}
+			}
+		};
 
 		if let Some(current_piece) = &mut self.current_piece {
 			let mut did_move = false;
 			// move down
 			{
-				// let mut y_to_move = 1 + self.move_y_delta;
-				let mut y_to_move = self.move_y_delta;
-
-				did_move = true;
-
-				self.move_y_delta = 0;
+				let mut y_to_move = 1;
+				let mut did_send_to_bottom = false;
 
 				if self.should_send_to_bottom {
 					y_to_move = NUM_ROWS;
 					self.should_send_to_bottom = false;
+					did_send_to_bottom = true;
+					self.frames_since_last_successful_move = MOVE_BUFFER_FRAMES;
 				}
 
 				while y_to_move > 0 {
@@ -271,18 +282,18 @@ impl Inner {
 						current_piece.top_left.y -= 1;
 						break;
 					} else {
-						did_move = true;
+						if !did_send_to_bottom {
+							did_move = true;
+						}
 					}
 				}
 			}
 
 			// move left/right
 			{
-				let mut x_to_move = self.move_x_delta;
-				let x_delta = if x_to_move > 0 { 1 } else { -1 };
-				self.move_x_delta = 0;
-				while x_to_move != 0 {
-					x_to_move -= x_delta;
+				let x_delta = if self.x_to_move > 0 { 1 } else { -1 };
+				while self.x_to_move != 0 {
+					self.x_to_move -= x_delta;
 					current_piece.top_left.x += x_delta;
 					if Inner::does_collide(&current_piece, &self.board_pieces) {
 						current_piece.top_left.x -= x_delta;
@@ -295,11 +306,18 @@ impl Inner {
 
 			// rotate
 			{
-				while self.rotate > 0 {
-					self.rotate -= 1;
-					Inner::rotate_clockwise(current_piece);
+				let rotate_delta = if self.rotations_to_perform > 0 { 1 } else { -1 };
+				while self.rotations_to_perform != 0 {
+					self.rotations_to_perform -= rotate_delta;
+					let backup = current_piece.squares.clone();
+					if rotate_delta > 0 {
+						Inner::rotate_clockwise(current_piece);
+					} else {
+						Inner::rotate_counter_clockwise(current_piece);
+					}
 					if Inner::does_collide(&current_piece, &self.board_pieces) {
-						Inner::rotate_counter_clockwise(&current_piece);
+						// rotating counter-clockwise seemed like a lot of work, so we're just copying memory instead
+						current_piece.squares = backup;
 					} else {
 						did_move = true;
 					}
@@ -312,8 +330,20 @@ impl Inner {
 				self.frames_since_last_successful_move += 1;
 			}
 		}
-		// TODO
+
 		Ok(())
+	}
+
+	fn rotate_counter_clockwise(current_piece: &mut Piece) {
+		for square in current_piece.squares.iter_mut() {
+			// flip about the y-axis
+			square.x = current_piece.size - 1 - square.x;
+
+			// translate about the origin
+			let temp = square.x;
+			square.x = square.y;
+			square.y = temp;
+		}
 	}
 
 	fn rotate_clockwise(current_piece: &mut Piece) {
@@ -328,9 +358,7 @@ impl Inner {
 		}
 	}
 
-	fn rotate_counter_clockwise(current_piece: &Piece) {}
-
-	fn does_collide(current_piece: &Piece, board: &Vec<Vec<Square>>) -> bool {
+	fn does_collide(current_piece: &Piece, board: &Vec<Square>) -> bool {
 		for square in current_piece.squares.iter() {
 			let x = current_piece.top_left.x + square.x;
 			let y = current_piece.top_left.y + square.y;
@@ -343,11 +371,9 @@ impl Inner {
 			}
 
 			// TODO: make more efficient
-			for board_row in board.iter() {
-				for board_piece in board_row.iter() {
-					if x == board_piece.position.x && y == board_piece.position.y {
-						return false;
-					}
+			for board_piece in board.iter() {
+				if x == board_piece.position.x && y == board_piece.position.y {
+					return true;
 				}
 			}
 		}
@@ -357,7 +383,6 @@ impl Inner {
 
 	fn get_random_piece(&mut self) -> Piece {
 		match self.rng.gen_range(0, 5) {
-			// match 1 { // TODO: take out
 			0 => Piece {
 				color: COLOR_LINE.to_string(),
 				top_left: Vector2D {
@@ -455,10 +480,8 @@ impl Inner {
 			}
 		}
 
-		for row in self.board_pieces.iter() {
-			for piece in row.iter() {
-				self.draw_rect(&piece.position, &piece.color);
-			}
+		for piece in self.board_pieces.iter() {
+			self.draw_rect(&piece.position, &piece.color);
 		}
 
 		// self.draw_rect(self.path.back().unwrap(), TAIL_COLOR);
