@@ -41,6 +41,7 @@ struct FVector2D {
 	y: f64,
 }
 
+#[derive(Clone)]
 struct Piece {
 	top_left: Vector2D,
 	size: i32,
@@ -236,6 +237,17 @@ impl Inner {
 	}
 
 	fn update(&mut self) -> Result<(), JsValue> {
+		if self.should_swap_piece {
+			self.should_swap_piece = false;
+			let previously_swapped_piece = self.swapped_piece.take();
+			self.swapped_piece = self.current_piece.take();
+
+			if let Some(mut current_piece) = previously_swapped_piece {
+				current_piece.top_left.y = 0;
+				self.current_piece = Some(current_piece);
+			}
+		}
+
 		match &self.current_piece {
 			None => {
 				self.current_piece = Some(self.get_random_piece());
@@ -358,6 +370,18 @@ impl Inner {
 		}
 	}
 
+	fn get_interception_point(current_piece: &Piece, board: &Vec<Square>) -> i32 {
+		let mut extra_y = 0;
+		let mut temp_piece = current_piece.clone(); // clone to get mutable version
+		loop {
+			temp_piece.top_left.y += 1;
+			extra_y += 1;
+			if Inner::does_collide(&temp_piece, &board) {
+				return extra_y - 1;
+			}
+		}
+	}
+
 	fn does_collide(current_piece: &Piece, board: &Vec<Square>) -> bool {
 		for square in current_piece.squares.iter() {
 			let x = current_piece.top_left.x + square.x;
@@ -387,7 +411,7 @@ impl Inner {
 				color: COLOR_LINE.to_string(),
 				top_left: Vector2D {
 					x: NUM_COLS / 2 - 2,
-					y: -1,
+					y: 0,
 				},
 				size: 4,
 				squares: vec![
@@ -417,7 +441,7 @@ impl Inner {
 				color: COLOR_SQUIGGLE.to_string(),
 				top_left: Vector2D {
 					x: NUM_COLS / 2 - 2,
-					y: -1,
+					y: 0,
 				},
 				size: 3,
 				squares: vec![
@@ -432,7 +456,7 @@ impl Inner {
 				color: COLOR_REVERSE_SQUIGGLE.to_string(),
 				top_left: Vector2D {
 					x: NUM_COLS / 2 - 2,
-					y: -1,
+					y: 0,
 				},
 				size: 3,
 				squares: vec![
@@ -472,19 +496,26 @@ impl Inner {
 			}
 		}
 
+		for piece in self.board_pieces.iter() {
+			self.draw_rect(&piece.position, &piece.color);
+		}
+
 		if let Some(current_piece) = &self.current_piece {
+			// draw ghost first in case real piece steps in
+			let extra_y = Inner::get_interception_point(&current_piece, &self.board_pieces);
+
+			for piece in current_piece.squares.iter() {
+				let x = current_piece.top_left.x + piece.x;
+				let y = current_piece.top_left.y + piece.y + extra_y;
+				self.draw_ghost_rect(&Vector2D { x: x, y: y }, &current_piece.color);
+			}
+
 			for piece in current_piece.squares.iter() {
 				let x = current_piece.top_left.x + piece.x;
 				let y = current_piece.top_left.y + piece.y;
 				self.draw_rect(&Vector2D { x: x, y: y }, &current_piece.color);
 			}
 		}
-
-		for piece in self.board_pieces.iter() {
-			self.draw_rect(&piece.position, &piece.color);
-		}
-
-		// self.draw_rect(self.path.back().unwrap(), TAIL_COLOR);
 
 		if self.is_paused {
 			self.draw_banner("PAUSED");
@@ -497,6 +528,7 @@ impl Inner {
 		} else if self.should_show_focus_banner {
 			self.draw_banner("LOST FOCUS");
 		}
+
 		Ok(())
 	}
 
@@ -543,33 +575,24 @@ impl Inner {
 		context.restore();
 	}
 
-	// fn draw_circles<'a, I>(&self, circles: I, color: &str)
-	// where
-	// 	I: Iterator<Item = &'a Vector2D>,
-	// {
-	// 	let context = &self.context;
-	// 	let radius = self.rect_size / 2.;
-	// 	let border = 2.;
-	// 	context.save();
-	// 	context.set_fill_style(&JsValue::from(color));
-	// 	context.set_stroke_style(&JsValue::from("black"));
-	// 	context.set_line_width(1.);
-	// 	for pos in circles {
-	// 		context.begin_path();
-	// 		context
-	// 			.arc(
-	// 				self.rect_size * pos.x as f64 + radius,
-	// 				self.rect_size * pos.y as f64 + radius,
-	// 				radius - border,
-	// 				0.,
-	// 				TAU,
-	// 			)
-	// 			.unwrap();
-	// 		context.fill();
-	// 		context.stroke();
-	// 	}
-	// 	context.restore();
-	// }
+	fn draw_ghost_rect(&self, rect: &Vector2D, color: &str) {
+		let context = &self.context;
+		context.save();
+		context.set_global_alpha(0.2);
+		context.set_fill_style(&JsValue::from(color));
+		context.set_stroke_style(&JsValue::from("black"));
+		context.set_line_width(1.);
+		context.begin_path();
+		context.rect(
+			self.rect_size * rect.x as f64,
+			self.rect_size * rect.y as f64,
+			self.rect_size,
+			self.rect_size,
+		);
+		context.fill();
+		context.stroke();
+		context.restore();
+	}
 
 	fn draw_banner(&self, text: &str) {
 		let context = &self.context;
