@@ -2,6 +2,9 @@ use crate::game::game::NUM_COLS;
 use crate::game::game::NUM_ROWS;
 use rand::rngs::ThreadRng;
 use rand::Rng;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::convert::TryInto;
 use std::{
 	cmp::{max, min},
 	collections::VecDeque,
@@ -23,16 +26,17 @@ const COLOR_SQUIGGLE: &str = "green"; // how many keys we'll keep track of befor
 const COLOR_REVERSE_SQUIGGLE: &str = "red"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_SQUARE: &str = "orange"; // how many keys we'll keep track of before ignoring inputs
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Vector2D {
 	x: i32,
 	y: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Square {
 	position: Vector2D,
 	color: String,
+	purgatory: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,7 +70,7 @@ pub struct Inner {
 
 	current_piece: Option<Piece>,
 	swapped_piece: Option<Piece>,
-	board_pieces: Vec<Square>, // one-dimensional
+	board_pieces: Vec<Vec<Square>>,
 
 	frames_between_updates: u32,
 	frames_until_update: u32,
@@ -252,22 +256,71 @@ impl Inner {
 			None => {
 				self.current_piece = Some(self.get_random_piece());
 				self.frames_since_last_successful_move = 0;
+
+				// fix the grid
+				// let's loop through the relevant rows, backwards, removing any that are full up
+
+				for row_index in (0..self.board_pieces.len()).rev() {
+					if let Some(row) = self.board_pieces.get(row_index) {
+						if row.len() == NUM_COLS.try_into().unwrap() {
+							self.board_pieces.remove(row_index);
+
+							// shift all rows above down one
+							for row_index in row_index..self.board_pieces.len() {
+								log::info!("Row index: {}", &row_index);
+								if let Some(row) = self.board_pieces.get_mut(row_index) {
+									for cell in row.iter_mut() {
+										cell.position.y += 1;
+									}
+								}
+							}
+						}
+					} else {
+						log::info!(
+							"Why didn't this work? index: {}, size: {}",
+							row_index,
+							self.board_pieces.len(),
+						);
+					}
+				}
 			}
 
 			Some(current_piece) => {
 				if self.frames_since_last_successful_move > MOVE_BUFFER_FRAMES {
+					let mut rows_to_check: BTreeSet<usize> = BTreeSet::new();
+
 					// add to board
 					for square in current_piece.squares.iter() {
 						let x = current_piece.top_left.x + square.x;
 						let y = current_piece.top_left.y + square.y;
 
-						self.board_pieces.push(Square {
+						let ty = (NUM_ROWS - y).try_into().unwrap(); // TODO: refactor
+						rows_to_check.insert(ty);
+
+						// make sure we have enough rows before we push to them
+						while self.board_pieces.len() <= ty {
+							self.board_pieces.push(vec![]);
+						}
+
+						self.board_pieces.get_mut(ty).unwrap().push(Square {
 							position: Vector2D { x: x, y: y },
 							color: current_piece.color.clone(),
+							..Default::default()
 						});
 					}
 
+					// let's loop through the relevant rows, backwards, removing any that are full up
+					for row_index in rows_to_check.iter().rev() {
+						let mut row = self.board_pieces.get_mut(*row_index).unwrap();
+						if row.len() == NUM_COLS.try_into().unwrap() {
+							for cell in row.iter_mut() {
+								cell.purgatory = true;
+							}
+						}
+					}
+
 					self.current_piece = None;
+					return Ok(());
 				}
 			}
 		};
@@ -370,7 +423,7 @@ impl Inner {
 		}
 	}
 
-	fn get_interception_point(current_piece: &Piece, board: &Vec<Square>) -> i32 {
+	fn get_interception_point(current_piece: &Piece, board: &Vec<Vec<Square>>) -> i32 {
 		let mut extra_y = 0;
 		let mut temp_piece = current_piece.clone(); // clone to get mutable version
 		loop {
@@ -382,7 +435,7 @@ impl Inner {
 		}
 	}
 
-	fn does_collide(current_piece: &Piece, board: &Vec<Square>) -> bool {
+	fn does_collide(current_piece: &Piece, board: &Vec<Vec<Square>>) -> bool {
 		for square in current_piece.squares.iter() {
 			let x = current_piece.top_left.x + square.x;
 			let y = current_piece.top_left.y + square.y;
@@ -395,9 +448,11 @@ impl Inner {
 			}
 
 			// TODO: make more efficient
-			for board_piece in board.iter() {
-				if x == board_piece.position.x && y == board_piece.position.y {
-					return true;
+			for row in board.iter() {
+				for board_piece in row.iter() {
+					if x == board_piece.position.x && y == board_piece.position.y {
+						return true;
+					}
 				}
 			}
 		}
@@ -496,8 +551,16 @@ impl Inner {
 			}
 		}
 
-		for piece in self.board_pieces.iter() {
-			self.draw_rect(&piece.position, &piece.color);
+		for row in self.board_pieces.iter() {
+			for piece in row.iter() {
+				let color = if piece.purgatory {
+					"brown"
+				} else {
+					&piece.color
+				};
+
+				self.draw_rect(&piece.position, color);
+			}
 		}
 
 		if let Some(current_piece) = &self.current_piece {
