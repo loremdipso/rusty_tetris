@@ -3,6 +3,9 @@ name = "rusty_tetris"
 version = "0.1.0"
 authors = ["Michael Adams <madams@gmail.com>"]
 edition = "2018"
+description = "Simple tetris clone"
+repository = "https://github.com/loremdipso/rusty_tetris"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib"]
