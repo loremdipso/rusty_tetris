@@ -9,14 +9,18 @@ use web_sys::CanvasRenderingContext2d;
 pub const FPS: i32 = (0.025 * 1000.0) as i32; // 0.025 sec -> 40 fps
 const MIN_SPEED: u32 = 5; // number of frames between updates
 const MAX_KEY_BUFF_LEN: usize = 3; // how many keys we'll keep track of before ignoring inputs
-const FRAMES_BEFORE_WE_SEAL_MOVE: u32 = 8;
+const FRAMES_BEFORE_WE_SEAL_MOVE: u32 = 5;
+const FRAMES_BEFORE_WE_SEAL_MOVE_AFTER_SEND_TO_BOTTOM: u32 = FRAMES_BEFORE_WE_SEAL_MOVE - 2;
 const FRAMES_TO_SHOW_PURGATORY: u32 = 2;
 
 const COLOR_LINE: &str = "#46b5d1"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_PYRAMID: &str = "#e43f5a"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_SQUIGGLE: &str = "#b030b0"; // how many keys we'll keep track of before ignoring inputs
-const COLOR_REVERSE_SQUIGGLE: &str = "#f638dc"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_REVERSE_SQUIGGLE: &str = "#72CB3B"; // how many keys we'll keep track of before ignoring inputs
 const COLOR_SQUARE: &str = "#c02739"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_L: &str = "#FF971C"; // how many keys we'll keep track of before ignoring inputs
+const COLOR_REVERSE_L: &str = "#FF3213"; // how many keys we'll keep track of before ignoring inputs
+
 const COLOR_PURGATORY: &str = "#ffd700";
 const COLOR_BACKGROUND: &str = "#443737";
 const COLOR_BANNER: &str = "black";
@@ -79,6 +83,7 @@ pub struct Inner {
 
 	rotations_to_perform: i32,
 	x_to_move: i32,
+	y_to_move: i32,
 
 	rng: ThreadRng,
 }
@@ -121,6 +126,7 @@ impl Inner {
 
 			rotations_to_perform: 0,
 			x_to_move: 0,
+			y_to_move: 0,
 
 			rng: rand::thread_rng(),
 		};
@@ -225,7 +231,7 @@ impl Inner {
 				// NOTE: y is flipped here since that's the default for rendering, and it's easier
 				// to flip it just here than anytime we draw
 				"ArrowUp" => self.rotations_to_perform += 1,
-				"ArrowDown" => self.rotations_to_perform -= 1,
+				"ArrowDown" => self.y_to_move += 1,
 
 				"ArrowRight" => self.x_to_move = 1,
 				"ArrowLeft" => self.x_to_move = -1,
@@ -333,9 +339,10 @@ impl Inner {
 			let mut did_move = false;
 			// move down
 			{
-				let mut y_to_move = 1;
-				let mut did_send_to_bottom = false;
+				let mut y_to_move = 1 + self.y_to_move;
+				self.y_to_move = 0;
 
+				let mut did_send_to_bottom = false;
 				if self.should_send_to_bottom {
 					y_to_move = NUM_ROWS;
 					self.should_send_to_bottom = false;
@@ -351,7 +358,11 @@ impl Inner {
 						current_piece.top_left.y -= 1;
 						break;
 					} else {
-						if !did_send_to_bottom {
+						if did_send_to_bottom {
+							// if sent to bottom, still give a few frames to move, but not as many
+							self.frames_since_last_successful_move =
+								FRAMES_BEFORE_WE_SEAL_MOVE_AFTER_SEND_TO_BOTTOM;
+						} else {
 							did_move = true;
 						}
 					}
@@ -465,7 +476,7 @@ impl Inner {
 	}
 
 	fn get_random_piece(&mut self) -> Piece {
-		match self.rng.gen_range(0, 5) {
+		match self.rng.gen_range(0, 7) {
 			0 => Piece {
 				color: COLOR_LINE.to_string(),
 				top_left: Vector2D {
@@ -538,6 +549,36 @@ impl Inner {
 					Vector2D { x: 0, y: 1 },
 					Vector2D { x: 1, y: 0 },
 					Vector2D { x: 1, y: 1 },
+				],
+			},
+
+			5 => Piece {
+				color: COLOR_L.to_string(),
+				top_left: Vector2D {
+					x: NUM_COLS / 2 - 1,
+					y: 0,
+				},
+				size: 3,
+				squares: vec![
+					Vector2D { x: 1, y: 0 },
+					Vector2D { x: 1, y: 1 },
+					Vector2D { x: 1, y: 2 },
+					Vector2D { x: 0, y: 2 },
+				],
+			},
+
+			6 => Piece {
+				color: COLOR_REVERSE_L.to_string(),
+				top_left: Vector2D {
+					x: NUM_COLS / 2 - 1,
+					y: 0,
+				},
+				size: 3,
+				squares: vec![
+					Vector2D { x: 1, y: 0 },
+					Vector2D { x: 1, y: 1 },
+					Vector2D { x: 1, y: 2 },
+					Vector2D { x: 2, y: 2 },
 				],
 			},
 
